@@ -177,10 +177,38 @@ data.frame(lmm = longit_beta, cox = surv_beta, pc_events) %>%
 
 # Joint investigation ----
 
+long_dat <- joint_sim()[[1]]
+surv_dat <- joint_sim()[[2]]
+
+# Remove where IDs have failed
+
+temp <- left_join(long_dat, surv_dat, "id")
+
+long_dat2 <- temp %>% 
+  filter(time <= survtime) %>% 
+  dplyr::select(names(long_dat))
+
+jd <- jointdata(
+  longitudinal = long_dat,
+  survival = surv_dat,
+  id.col = "id",
+  time.col = "time",
+  baseline = surv_dat[,c("id", "x")]
+)
+
+joint_fit <- joint(jd,
+      long.formula = Y ~ xl + time,
+      surv.formula = Surv(survtime, status) ~ x,
+      model = "int", sepassoc = T)
 
 
-
-
+#' ###
+#' TO DO:
+#' Functionise the above joint fit and 
+#' parse through the list's outputs to obtain estimates
+#' and do some plots. After, move on to more complex 
+#' scenario (3x covariates) and then random slope
+#' ###
 
 
 
