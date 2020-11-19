@@ -48,10 +48,10 @@ long_dat <- data.frame(id, x1, tt, Y)
 summary(lmer(Y ~ x1 + (1|id), data = long_dat))
 
 # Survival part ----
-lambda <- 1 # BL Hazard
+lambda <- 0.01 # BL Hazard
 
 uu <- runif(m)
-survtime <- -log(uu)/(lambda * exp(b1*trt + U_int))
+survtime <- -log(uu)/(lambda * exp(b1*trt + U_int)) # This is wrong - needs its own coeff - fixed in function
 length(which(survtime > 5))/length(survtime) # ~ 50% experience event with lambda = 1
 
 ratec <- 0.05
@@ -96,9 +96,9 @@ summary(fit)
 # Just random intercept and one binary covariate, again.
 
 joint_sim <- function(m = 500, n_i = 6, 
-                      b0 = 40, b1 = -10, 
+                      b0 = 40, b1 = -10, b1s = -0.5,
                       sigma.i = 1.5, sigma.e = 2.5,
-                      lambda = 0.5){
+                      lambda = 0.05, nu = 1){
   # Set out variables
   N <-  m * n_i
   id <- 1:m
@@ -122,21 +122,70 @@ joint_sim <- function(m = 500, n_i = 6,
   
   # Survival times
   u <- runif(m)
-  survtime <- -log(u)/(lambda * exp(b1 * x))
+  
+  tt <- -log(u)/(lambda * exp(b1s * x))
   
   # Censoring and truncation
   rateC <- 0.05
   censor <- rexp(m, rateC)
-  status <- ifelse(censor < survtime, 0, 1)
-  survtime <- pmin(survtime, censor, tau)
+  survtime <- pmin(tt, censor, tau) # time to output
+  status <- ifelse(survtime == tt, 1, 0)
   
   surv_dat <- data.frame(id, x, survtime, status)
   
-  # Extra output
+  # Extra output - number of events
   pc_events <- length(which(survtime < tau))/m * 100
   
   return(list(long_dat, surv_dat, pc_events))
   
 }
 
-# Separate investigation
+sdd <- joint_sim()[[2]]
+coxph(Surv(survtime, status) ~ x, data = sdd)
+
+
+# Investigate -------------------------------------------------------------
+
+# Separate investigation ----
+
+separate_fits <- function(df){
+  lmm_fit <- lmer(Y ~ xl + time + (1|id), data = df[[1]])
+  surv_fit <- coxph(Surv(survtime, status) ~ x, data = df[[2]])
+  return(
+     list(lmm_fit, surv_fit)
+  )
+}
+
+pb <- progress::progress_bar$new(total = 1000)
+
+longit_beta <- surv_beta <- pc_events <-  c()
+for(i in 1:1000){
+  dat <- joint_sim()
+  pc_events[i] <- dat[[3]]
+  fits <- separate_fits(dat)
+  longit_beta[i] <- fits[[1]]@beta[2]
+  surv_beta[i] <- fits[[2]]$coefficients
+  pb$tick()
+}
+
+# Confirm it's got the right things
+data.frame(lmm = longit_beta, cox = surv_beta, pc_events) %>%
+  gather("outcome", "value") %>% 
+  ggplot(aes(x = value)) +
+  geom_density(fill = "grey20", alpha = .5) + 
+  facet_wrap(~outcome, scales = "free")
+
+# Joint investigation ----
+
+
+
+
+
+
+
+
+
+
+
+
+
