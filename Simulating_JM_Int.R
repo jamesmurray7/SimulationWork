@@ -52,4 +52,42 @@ lambda <- 1 # BL Hazard
 
 uu <- runif(m)
 survtime <- -log(uu)/(lambda * exp(b1*trt))
-length(which(survtime > 6))/length(survtime)
+length(which(survtime > 5))/length(survtime) # ~ 50% experience event with lambda = 1
+
+ratec <- 0.05
+censor <- rexp(m, ratec)
+id <- 1:m
+surv_dat <- data.frame(id, trt, survtime, censor)
+
+# Termination and censoring time
+surv_dat$time <- pmin(survtime, censor, max(t)) # When does the profile stop?
+surv_dat$status <- ifelse(surv_dat$censor < surv_dat$survtime, 0, 1) # Status (1:died)
+surv_dat <- surv_dat[, c("id", "trt", "time", "status")]
+
+summary(coxph(Surv(time, status) ~ trt, data = surv_dat))
+
+# Longitudinal part and survival part are therefore
+long_dat %>% head(10)
+surv_dat %>% head(10)
+
+joint_dat <- left_join(long_dat, surv_dat, by = "id")
+
+# Cast to class "jointdata"
+
+
+joineR_joint_dat <- joineR::jointdata(
+  longitudinal = long_dat,
+  survival = surv_dat,
+  baseline = surv_dat[, c("id", "trt")],
+  id.col = "id",
+  time.col = "tt"
+) 
+
+fit <- joineR::joint(joineR_joint_dat, 
+              long.formula = Y ~ trt,
+              surv.formula = Surv(time, status) ~ trt,
+              model = "int",
+              sepassoc = F, max.it = 50,
+              verbose = T)
+summary(fit) # 
+
