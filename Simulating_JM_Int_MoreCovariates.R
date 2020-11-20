@@ -61,7 +61,7 @@ time <- rep(0:(t-1), m)
 
 Y <- Xl %*% t(Bl) + Ul + epsilon
 
-long_data <- data.frame(id = rep(id, each = n_i), time, x1l, x2l, x3l, Y)
+long_data <- data.frame(id = rep(id, each = n_i), time, Xl, Y)
 
 summary(lmer(Y ~ x1l + x2l + x3l + time + (1|id), data = long_data)) # Cool!
 
@@ -111,45 +111,54 @@ summary(fit)
 
 
 # Functionise -------------------------------------------------------------
-# Just random intercept and one binary covariate, again.
+# Just random intercept again!
 
-joint_sim <- function(m = 500, n_i = 6, 
-                      b0 = 40, b1 = -10, b1s = -0.5,
+joint_sim <- function(m = 200, n_i = 6, 
+                      Bl = c(40, -10, 5, 15, 0.1), # Longit: Intercept, binary, factor2-3, continuous
+                      Bs = c(-0.3, 0.05), # Survival: log-odds binary and continuous,
                       sigma.i = 1.5, sigma.e = 2.5,
-                      lambda = 0.05){
+                      lambda = 0.005){
   # Set out variables
   N <-  m * n_i
   id <- 1:m
   time <- 0:(n_i-1)
   tau <- max(time) 
   U_int <- rnorm(m, 0, sigma.i) # Random effects
-  x <- rbinom(m, 1, 0.5) # Treatment assignment per id
+  epsilon <- rnorm(N, 0, sigma.e)
+  # Baseline covariates
+  x1 <- rbinom(m, 1, 0.5) # Treatment received
+  x2 <- gl(3, 1, m) # Factor
+  x3 <- floor(rnorm(m, 65, 7)) # Age
+  id <- 1:m
   
   # Longitudinal part //
-  
-  xl <- rep(x, each = n_i)
-  U <- rep(U_int, each = n_i)
-  epsilon <- rnorm(N, 0, sigma.e)
-  Y <- b0 + U + b1 * xl + epsilon
+  Bl <- matrix(Bl, nrow = 1) # Coefficients
+  x1l <- rep(x1, each = n_i)
+  x2l <- rep(x2, each = n_i)
+  x3l <- rep(x3, each = n_i)
+  Xl <- model.matrix(~x1l+x2l+x3l)
+  Ul <- rep(U_int, each = n_i)
+
+  Y <- Xl %*% t(Bl) + Ul + epsilon
   
   long_dat <- data.frame(id = rep(id, each = n_i),
                          time = rep(time, m),
-                         xl, Y)
+                         x1l, x2l, x3l, Y)
   
-  # Survival part     //
-  
+  # Survival part //
+  Bs <- matrix(Bs, nrow = 1)
+  Xs <- model.matrix(~x1+x3-1)
   # Survival times
   u <- runif(m)
-  
-  tt <- -log(u)/(lambda * exp(b1s * x))
+  tt <- -log(u)/(lambda * exp(Xs %*% t(Bs) + U_int))
   
   # Censoring and truncation
-  rateC <- 0.05
+  rateC <- 0.001
   censor <- rexp(m, rateC)
   survtime <- pmin(tt, censor, tau) # time to output
   status <- ifelse(survtime == tt, 1, 0)
   
-  surv_dat <- data.frame(id, x, survtime, status)
+  surv_dat <- data.frame(id, x1, x3, survtime, status)
   
   # Extra output - number of events
   pc_events <- length(which(survtime < tau))/m * 100
@@ -159,21 +168,57 @@ joint_sim <- function(m = 500, n_i = 6,
 }
 
 temp <- joint_sim()
-lmer(Y ~ xl + time + (1|id), data = temp[[1]])
-coxph(Surv(survtime, status) ~ x, data = temp[[2]]) # Look
+summary(lmer(Y ~ x1l + x2l + x3l + time + (1|id), data = temp[[1]]))
+summary(coxph(Surv(survtime, status) ~ x1 + x3, data = temp[[2]]))
 
 
-# Investigate -------------------------------------------------------------
-
-# Separate investigation ----
-
+# Separate investigation --------------------------------------------------
+# Should illustrate need for JM
 separate_fits <- function(df){
-  lmm_fit <- lmer(Y ~ xl + time + (1|id), data = df[[1]])
-  surv_fit <- coxph(Surv(survtime, status) ~ x, data = df[[2]])
+  lmm_fit <- lmer(Y ~ x1l + x2l + x3l + time + (1|id), data = df[[1]])
+  surv_fit <- coxph(Surv(survtime, status) ~ x1 + x3, data = df[[2]])
   return(
-     list(lmm_fit, surv_fit)
+    list(lmm_fit, surv_fit)
   )
 }
+
+pb <- progress::progress_bar$new(total = 1000)
+longit_beta <- data.frame(beta0 = NA, beta1 = NA, beta22 = NA, beta23 = NA, beta3 = NA, sigma.e = NA, sigma.u = NA)
+surv_beta <- data.frame(beta1s = NA, beta3s = NA)
+pc_events <- c()
+
+for(i in 1:1000){
+  dat <- joint_sim()
+  pc_events[i] <- dat[[3]]
+  fits <- separate_fits(dat)
+  long_coefs <- fits[[1]]@beta[1:5]
+  long_sigma.e <- sigma(fits[[1]])
+  long_sigma.u <- as.numeric(attr(VarCorr(fits[[1]])$id, "stddev"))
+  longit_beta[i,] <- c(long_coefs, long_sigma.e, long_sigma.u)
+  surv_beta[i, ] <- as.numeric(fits[[2]]$coefficients)
+  pb$tick()
+}
+ex <- expression
+to_plot <- cbind(longit_beta, surv_beta, pc_events) %>% tibble %>% 
+  gather("parameter", "estimate") %>% 
+  mutate(param = factor(parameter, levels = c("beta0", "beta1", "beta22", "beta23", "beta3", "sigma.e", "sigma.u",
+                                              "beta1s", "beta3s", "pc_events"),
+                        labels = c(ex(beta[0]), ex(beta[1]), ex(beta[22]), ex(beta[23]), ex(beta[3]),
+                                   ex(sigma[e]), ex(sigma[u]), ex(beta[1*"S"]), ex(beta[3*"S"]), ex("Events")))
+         )
+
+plot_lines <- to_plot %>% distinct(param)
+plot_lines$xint <- c(40, -10, 5, 15, 0.1, 2.5, 1.5, -0.3, 0.05, NA)
+
+to_plot %>% 
+  ggplot(aes(x = estimate)) + 
+  geom_density(fill = "grey20", alpha = .2) + 
+  geom_vline(data = plot_lines, aes(xintercept = xint), colour = "blue", alpha = .5, lty = 3) + 
+  facet_wrap(~param, scales = "free", nrow = 5, ncol = 2, labeller = label_parsed) + 
+  labs(title = "Separate investigation", x = "Estimate")
+ggsave("./JM-sims-plots/Separate_Investigation.png")
+
+# Joint investigation -----------------------------------------------------
 
 pb <- progress::progress_bar$new(total = 1000)
 longit_beta <- surv_beta <- pc_events <-  c()
@@ -225,74 +270,4 @@ joint_fit <- joint(jd,
 summary(joint_fit)
 
 
-#' ###
-#' TO DO:
-#' Functionise the above joint fit and 
-#' parse through the list's outputs to obtain estimates
-#' and do some plots. After, move on to more complex 
-#' scenario (3x covariates) and then random slope
-#' ###
-
-# Functionise joint fit ---------------------------------------------------
-
-joint_fit <- function(...){
-  # Initialise long and survival parts
-  dat <- joint_sim(...)
-  temp <- left_join(dat[[1]], dat[[2]], "id")
-  long <- temp %>% filter(time <= survtime) %>% dplyr::select(names(dat[[1]]))
-  surv <- dat[[2]]
-  # Cast to class joint data //
-  jd <- jointdata(
-    longitudinal = long, survival = surv,
-    id.col = "id", time.col = "time",
-    baseline = surv[, c("id", "x")]
-  )
-  # Fit joint model //
-  fit <- joint(jd,
-               long.formula = Y ~ xl + time,
-               surv.formula = Surv(survtime, status) ~ x,
-               model = "int")
-  # Extract parameters of interest //
-  epsilon <- sqrt(fit$sigma.z) # Random error SD
-  U <- sqrt(as.numeric(fit$sigma.u)) # Random effects SD
-  beta_l <- fit$coefficients$fixed$longitudinal[2,1]
-  beta_s <- fit$coefficients$fixed$survival
-  # Return data frame of these coefficients
-  return(
-    data.frame(beta_l, beta_s, U, epsilon)
-  )
-}
-
-fits <- replicate(100, joint_fit(), simplify = F) # Default 500 x 6 data
-fits_smallsample <- replicate(100, joint_fit(m = 100, n_i = 5), simplify = F)
-fits_largersample <- replicate(100, joint_fit(m = 750, n_i = 10), simplify = F)
-
-# Plot these lists of model fits
-plots <- list()
-plotfn <- function(fitlist){
-  plot.out <- fitlist %>% 
-    bind_rows %>% 
-    gather("parameter", "estimate") %>% 
-    mutate(
-      param = factor(parameter, levels = c("beta_l", "beta_s", "epsilon", "U"),
-                     labels = c(expression(beta[longit]), expression(beta[surv]),
-                                expression(sigma[e]), expression(sigma[U])))
-    ) %>% 
-    ggplot(aes(x = estimate)) + 
-    geom_density(colour = "grey20", alpha = .2) + 
-    facet_wrap(~param, ncol = 4, nrow = 1, scales = "free", labeller = label_parsed) + 
-    theme(
-      strip.text = element_text(size = 12, colour = "black"),
-      strip.background = element_blank()
-    )
-  return(plot.out)
-}
-
-ggpubr::ggarrange(
-  plotfn(fits_smallsample),
-  plotfn(fits),
-  plotfn(fits_largersample),
-  ncol = 1
-)
-ggsave("./JM-sims-plots/SampleSizeInt.png")
   
