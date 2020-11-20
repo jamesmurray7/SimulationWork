@@ -198,6 +198,8 @@ for(i in 1:1000){
   surv_beta[i, ] <- as.numeric(fits[[2]]$coefficients)
   pb$tick()
 }
+
+
 ex <- expression
 to_plot <- cbind(longit_beta, surv_beta, pc_events) %>% tibble %>% 
   gather("parameter", "estimate") %>% 
@@ -218,36 +220,15 @@ to_plot %>%
   labs(title = "Separate investigation", x = "Estimate")
 ggsave("./JM-sims-plots/Separate_Investigation.png")
 
+
+
 # Joint investigation -----------------------------------------------------
-
-pb <- progress::progress_bar$new(total = 1000)
-longit_beta <- surv_beta <- pc_events <-  c()
-for(i in 1:1000){
-  dat <- joint_sim()
-  pc_events[i] <- dat[[3]]
-  fits <- separate_fits(dat)
-  longit_beta[i] <- fits[[1]]@beta[2]
-  surv_beta[i] <- fits[[2]]$coefficients
-  pb$tick()
-}
-
-mean(longit_beta); mean(surv_beta)
-
-# Confirm it's got the right things in this separate case.
-data.frame(lmm = longit_beta, cox = surv_beta, pc_events) %>%
-  gather("outcome", "value") %>% 
-  ggplot(aes(x = value)) +
-  geom_density(fill = "grey20", alpha = .5) + 
-  facet_wrap(~outcome, scales = "free")
-
-# Joint investigation ----
 library(joineR)
 
 long_dat <- joint_sim()[[1]]
 surv_dat <- joint_sim()[[2]]
 
-# Remove where IDs have failed
-
+# Single-run
 temp <- left_join(long_dat, surv_dat, "id")
 
 long_dat2 <- temp %>% 
@@ -259,15 +240,61 @@ jd <- jointdata(
   survival = surv_dat,
   id.col = "id",
   time.col = "time",
-  baseline = surv_dat[,c("id", "x")]
+  baseline = surv_dat[,c("id", "x1", "x3")]
 )
 
 joint_fit <- joint(jd,
-      long.formula = Y ~ xl + time,
-      surv.formula = Surv(survtime, status) ~ x,
+      long.formula = Y ~ x1l + x2l + x3l + time,
+      surv.formula = Surv(survtime, status) ~ x1 + x3,
       model = "int") # Sepassoc doesn't matter as only one L.A.
 
 summary(joint_fit)
 
+# Function - allowing us to change sample sizes
+joint_fit <- function(m, n_i){
+  dat <- joint_sim(m = m, n = n_i)
+  long_data <- left_join(dat[[1]], dat[[2]], "id") %>% 
+    filter(time <= survtime) %>% 
+    select(names(dat[[1]]))
+  jd <- jointdata(
+    longitudinal = long_data,
+    survival = dat[[2]],
+    time.col = "time", id.col = "id",
+    baseline = dat[[2]][, c("id", "x1", "x3")]
+  )
+  fit <- joint(jd,
+               long.formula = Y ~ x1l + x2l + x3l + time,
+               surv.formula = Surv(survtime, status) ~ x1 + x3,
+               model = "int")
+  return(fit)
+}
 
+small <- replicate(500, joint_fit(100, 5), simplify = F)
+med <- replicate(500, joint_fit(500,5), simplify = F)
+large <- replicate(500, joint_fit(500,10), simplify = F)
+
+extract_coefs <- function(fit){
+  converged <- fit$convergence
+  # Longitudinal parameters
+  longits <- t(as.numeric(t(fit$coefficients$fixed$longitudinal))[1:5])
+  sigma.e <- sqrt(fit$sigma.z)
+  sigma.u <- as.numeric(sqrt(d$sigma.u))
+  # Survival
+  surv <- t(as.numeric(fit$coefficients$fixed$survival))
+  # Latent association, gamma
+  latent_association <- as.numeric(fit$coefficients$latent)
   
+  return(data.frame(converged, longits, sigma.e, sigma.u, surv, latent_association))
+}
+
+small2 <- tibble(small)
+small2 <- small2 %>% mutate(params = map(small, extract_coefs))
+small2 %>% 
+  unnest(params) %>% 
+  rename(b0 = X1, b1 = X2, b22 = X3, b23 = X4, b3 = X5, b1s = `X1.1`, b3s = `X2.1`) %>% 
+  select(-small) %>% 
+  gather("parameter", "estimate", -converged) %>% 
+  ggplot(aes(x = estimate)) + 
+  geom_density(fill = "grey20", alpha = .2) +
+  facet_wrap(~parameter, scales = "free", nrow = 5, ncol = 2)
+
