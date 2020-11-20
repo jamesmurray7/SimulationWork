@@ -270,5 +270,11 @@ plotfn <- function(fitlist){
   return(plot.out)
 }
 
-plotfn(fits_smallsample)
+ggpubr::ggarrange(
+  plotfn(fits_smallsample),
+  plotfn(fits),
+  plotfn(fits_largersample),
+  ncol = 1
+)
+ggsave("./JM-sims-plots/SampleSizeInt.png")
   
