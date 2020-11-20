@@ -42,7 +42,7 @@ b23_l <- 15
 b3_l <- 0.1
 Bl <- matrix(c(b0, b1_l, b22_l, b23_l, b3_l), nrow = 1) # Cast to matrix
 # Survival coefficients //
-lambda <- 0.05
+lambda <- 0.005
 b1_s <- -0.3 # log-odds associated with having treatment (30% HR reduction)
 b3_s <- 0.05 # log-odds associated with one unit increase age (5% HR increase)
 # Data - baseline // 
@@ -65,48 +65,48 @@ long_data <- data.frame(id = rep(id, each = n_i), time, x1l, x2l, x3l, Y)
 
 summary(lmer(Y ~ x1l + x2l + x3l + time + (1|id), data = long_data)) # Cool!
 
-# Survival part ----
-lambda <- 0.01 # BL Hazard
+# Survival part //
+Xs <- model.matrix(~x1+x3-1) # Only considering binary and continuous
+Bs <- matrix(c(b1_s, b3_s), nrow = 1)
 
 uu <- runif(m)
-survtime <- -log(uu)/(lambda * exp(b1*trt + U_int)) # This is wrong - needs its own coeff - fixed in function
-length(which(survtime > 5))/length(survtime) # ~ 50% experience event with lambda = 1
+tt <- -log(uu)/(lambda * exp(Xs %*% t(Bs) + U_int)) 
+length(which(tt > max(t)))/length(tt) # % who experience event
 
-ratec <- 0.05
-censor <- rexp(m, ratec)
-id <- 1:m
-surv_dat <- data.frame(id, trt, survtime, censor)
+# Censoring and truncation
+censor <- rexp(m, 0.001)
+tau <- max(time)
+survtime <- pmin(tt, censor, tau) # time to output
+status <- ifelse(survtime == tt, 1, 0)
 
-# Termination and censoring time
-surv_dat$time <- pmin(survtime, censor, max(t)) # When does the profile stop?
-surv_dat$status <- ifelse(surv_dat$censor < surv_dat$survtime, 0, 1) # Status (1:died)
-surv_dat <- surv_dat[, c("id", "trt", "time", "status")]
+surv_data <- data.frame(id, x1, x3, survtime, status)
 
-summary(coxph(Surv(time, status) ~ trt, data = surv_dat))
+summary(coxph(Surv(survtime, status) ~ x1 + x3, data = surv_data))
 
-# Longitudinal part and survival part are therefore
-long_dat %>% head(10)
-surv_dat %>% head(10)
+# Single-run joint model ----
+long_data %>% head(10)
+surv_data %>% head(10)
 
-joint_dat <- left_join(long_dat, surv_dat, by = "id")
+temp <- left_join(long_data, surv_data, "id"); head(temp)
+
+long_data2 <- temp %>% 
+  filter(time <= survtime) %>% 
+  dplyr::select(names(long_data))
 
 # Cast to class "jointdata"
 
-
-joineR_joint_dat <- joineR::jointdata(
-  longitudinal = long_dat,
-  survival = surv_dat,
-  baseline = surv_dat[, c("id", "trt")],
+jd <- joineR::jointdata(
+  longitudinal = long_data2,
+  survival = surv_data,
+  baseline = surv_data[, c("id", "x1", "x3")],
   id.col = "id",
-  time.col = "tt"
+  time.col = "time"
 ) 
 
-fit <- joineR::joint(joineR_joint_dat, 
-              long.formula = Y ~ trt,
-              surv.formula = Surv(time, status) ~ trt,
-              model = "int",
-              sepassoc = F, max.it = 50,
-              verbose = T)
+fit <- joineR::joint(jd, 
+              long.formula = Y ~ x1l + x2l +x3l + time,
+              surv.formula = Surv(survtime, status) ~ x1 + x3,
+              model = "int")
 summary(fit) 
 
 
