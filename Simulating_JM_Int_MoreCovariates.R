@@ -269,16 +269,35 @@ joint_fit <- function(m, n_i){
   return(fit)
 }
 
-small <- replicate(500, joint_fit(100, 5), simplify = F)
-med <- replicate(500, joint_fit(500,5), simplify = F)
-large <- replicate(500, joint_fit(500,10), simplify = F)
+smallfn <- function(x){
+  replicate(x, joint_fit(100, 5), simplify = F)
+}
+medfn <- function(x){
+  replicate(x, joint_fit(250, 6), simplify = F)
+}
+largefn <- function(x){
+  replicate(x, joint_fit(500, 5), simplify = F)
+}
 
+library(furrr)
+plan(multicore)
+
+small_results <- future_map(500, smallfn)
+plan(sequential)
+plan(multicore)
+med_results <- future_map(500, medfn)
+plan(sequential)
+plan(multicore)
+large_results <- future_map(500, largefn)
+plan(sequential)
+
+# Extract joint fits and compare.
 extract_coefs <- function(fit){
   converged <- fit$convergence
   # Longitudinal parameters
   longits <- t(as.numeric(t(fit$coefficients$fixed$longitudinal))[1:5])
   sigma.e <- sqrt(fit$sigma.z)
-  sigma.u <- as.numeric(sqrt(d$sigma.u))
+  sigma.u <- as.numeric(sqrt(fit$sigma.u))
   # Survival
   surv <- t(as.numeric(fit$coefficients$fixed$survival))
   # Latent association, gamma
@@ -287,14 +306,42 @@ extract_coefs <- function(fit){
   return(data.frame(converged, longits, sigma.e, sigma.u, surv, latent_association))
 }
 
-small2 <- tibble(small)
-small2 <- small2 %>% mutate(params = map(small, extract_coefs))
-small2 %>% 
-  unnest(params) %>% 
-  rename(b0 = X1, b1 = X2, b22 = X3, b23 = X4, b3 = X5, b1s = `X1.1`, b3s = `X2.1`) %>% 
-  select(-small) %>% 
-  gather("parameter", "estimate", -converged) %>% 
-  ggplot(aes(x = estimate)) + 
-  geom_density(fill = "grey20", alpha = .2) +
-  facet_wrap(~parameter, scales = "free", nrow = 5, ncol = 2)
+small_results2 <- tibble(small_results[[1]]) %>% mutate(params = map(`small_results[[1]]`, extract_coefs))
+med_results2 <- tibble(med_results[[1]]) %>% mutate(params = map(`med_results[[1]]`, extract_coefs))
+large_results2 <- tibble(large_results[[1]]) %>% mutate(params = map(`large_results[[1]]`, extract_coefs))
 
+ex <- expression
+param_plot <- function(df){
+  to_plot <- df %>% 
+    unnest(params) %>% 
+    rename(b0 = X1, b1 = X2, b22 = X3, b23 = X4, b3 = X5, b1s = `X1.1`, b3s = `X2.1`) %>% 
+    select(-1) %>% 
+    gather("parameter", "Estimate", -converged) %>% 
+    filter(converged) %>% 
+    mutate(
+      param = factor(parameter,
+                     levels = c("b0", "b1", "b22", "b23", "b3", "sigma.u", "sigma.e",
+                                "b1s", "b3s", "latent_association"),
+                     labels = c(ex(beta[0]), ex(beta[1]), ex(beta[22]),
+                                ex(beta[23]), ex(beta[3]), ex(sigma[u]), ex(sigma[e]),
+                                ex(beta[1*"S"]), ex(beta[3*"S"]), ex(gamma[0])))
+    )
+  
+  xints <- to_plot %>% distinct(param)
+  xints$xint <- c(40, -10, 5, 15, 0.1, 2.5, 1.5, -0.3, 0.05, 1)
+
+  to_plot %>% 
+    ggplot(aes(x = Estimate)) + 
+    geom_density(alpha = .2, fill = "grey20") + 
+    geom_vline(data = xints, aes(xintercept = xint), colour = "blue", lty = 1, alpha = .8) + 
+    facet_wrap(~param, scales = "free", ncol = 2, nrow = 5, labeller = label_parsed) + 
+    theme(strip.background = element_blank(),
+          strip.text.x = element_text(colour = "black", size = 12))
+}
+
+param_plot(small_results2)
+ggsave("./JM-sims-plots/SmallSample.png")
+param_plot(med_results2)
+ggsave("./JM-sims-plots/MediumSample.png")
+param_plot(large_results2)
+ggsave("./JM-sims-plots/LargeSample.png")
