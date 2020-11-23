@@ -9,7 +9,6 @@
 # Prerequisites ------------------------------------------------------------
 dev.off()
 rm(list = ls())
-library(MASS)
 library(tidyverse)
 theme_set(theme_light())
 library(lme4)
@@ -24,6 +23,7 @@ library(survival)
 
 # Single run --------------------------------------------------------------
 # (will functionise afterwards)
+
 # 'Global' parameters //
 n_i <- 6 
 m <- 250
@@ -33,20 +33,76 @@ sigma.i <- 3   # Random intercept SD
 sigma.s <- 2   # Random slope SD
 sigma.e <- 1.5 # Epsilon SD
 
-# Covariance matrix
+# Covariance matrix //
 sigma <- matrix(
   c(sigma.i ^ 2, rho * sigma.i * sigma.s,
   rho * sigma.i * sigma.s, sigma.s^2), nrow = 2, byrow = T
 )
 
-# Generate Random effects
+# Generate Random effects //
 RE <- MASS::mvrnorm(m, c(0,0), sigma)
 Ui <- RE[, 1]; Us <- RE[, 2] # Intercept; Slope
 
+# Covariates - baseline //
+id <- 1:m
+x1 <- rbinom(m, 1, 0.5) # Treatment received
+x2 <- gl(3, 1, m) # Factor
+x3 <- floor(rnorm(m, 65, 10)) # Age
+
 # Longitudinal part //
-# Survival part
+# Coefficients
+b0 <- 40; b1 <- -10; b22 <- 5; b23 <- 15; b3 <- 0.1
+Bl <- matrix(c(b0, b1, b22, b23, b3), nrow = 1) # Cast to matrix
+# Baseline covariates
+x1_l <- rep(x1, each = n_i)
+x2_l <- rep(x2, each = n_i)
+x3_l <- rep(x3, each = n_i)
+Xl <- model.matrix(~x1_l+x2_l+x3_l)
+time <- rep(0:(n_i-1), m)
+# REs
+U1l <- rep(Ui, each = n_i)
+U2l <- rep(Us, each = n_i)
+epsilon <- rnorm(N, 0, sigma.e)
+# Response
+Y <- Xl %*% t(Bl) + U1l + U2l * time + epsilon
+# Data and quick model
+long_data <- data.frame(id = rep(id, each = n_i), x1_l, x2_l, x3_l, time, Y)
+summary(lmer(Y ~ x1_l + x2_l + x3_l + time + (1+time|id), data = long_data)) # Cool!
+
+# Survival part //
+lambda <- 0.05
+b1s <- -0.3 # log-odds associated with having treatment (30% HR reduction)
+b3s <- 0.05 # log-odds associated with one unit increase age (5% HR increase)  
+Bs <- matrix(c(b1s, b3s), nrow = 1)
+Xs <- model.matrix(~ x1 + x3 - 1)
+  
+# Simulate survival times
+uu <- runif(m)
+tt <- -log(uu)/(lambda * exp(Xs %*% t(Bs) + Ui + Us))
+# Censoring
+censor <- rexp(m, 0.01)
+survtime <- pmin(tt, censor, 5)
+status <- ifelse(survtime == tt, 1, 0)
+
+surv_data <- data.frame(id, x1, x3, survtime, status)
+
+summary(coxph(Surv(survtime, status) ~ x1 + x3, data = surv_data)) # Way further off than just R.I!
 
 # Cast to class "jointdata"
+
+jd <- joineR::jointdata(
+  longitudinal = long_data,
+  survival = surv_data,
+  time.col = "time",
+  id.col = "id",
+  baseline = surv_data[, c("id", "x1", "x3")]
+)
+
+summary(joineR::joint(
+  data = jd,
+  long.formula = Y ~ x1_l + x2_l + x3_l + time,
+  surv.formula = Surv(survtime, status) ~ x1 + x3
+)) # Cool cool!
 
 
 # Functionise -------------------------------------------------------------
