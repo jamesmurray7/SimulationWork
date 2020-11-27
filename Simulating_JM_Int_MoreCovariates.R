@@ -113,52 +113,62 @@ summary(fit)
 # Functionise -------------------------------------------------------------
 # Just random intercept again!
 
-joint_sim <- function(m = 200, n_i = 6, 
+joint_sim <- function(m = 250, n_i = 5, 
                       Bl = c(40, -10, 5, 15, 0.1), # Longit: Intercept, binary, factor2-3, continuous
                       Bs = c(-0.3, 0.05), # Survival: log-odds binary and continuous,
                       sigma.i = 1.5, sigma.e = 2.5,
                       lambda = 0.005){
-  # Set out variables
-  N <-  m * n_i
+  # Common parameters //
+  N <- m * n_i
   id <- 1:m
-  time <- 0:(n_i-1)
-  tau <- max(time) 
-  U_int <- rnorm(m, 0, sigma.i) # Random effects
+  tau <- n_i-1
+  # SDs //
+  sigma.e <- 2.5 # measurement
+  sigma.i <- 1.5 # intercept
+  # Error terms //
+  U_int <- rnorm(m, 0, sigma.i)
   epsilon <- rnorm(N, 0, sigma.e)
-  # Baseline covariates
+  # Longitudinal coefficients //
+  Bl <- matrix(Bl, nrow = 1) # Cast to matrix
+  # Survival coefficients //
+  lambda <- 0.005
+  b1_s <- -0.3 # log-odds associated with having treatment (30% HR reduction)
+  b3_s <- 0.05 # log-odds associated with one unit increase age (5% HR increase)
+  # Data - baseline // 
   x1 <- rbinom(m, 1, 0.5) # Treatment received
   x2 <- gl(3, 1, m) # Factor
   x3 <- floor(rnorm(m, 65, 7)) # Age
   id <- 1:m
   
   # Longitudinal part //
-  Bl <- matrix(Bl, nrow = 1) # Coefficients
   x1l <- rep(x1, each = n_i)
   x2l <- rep(x2, each = n_i)
   x3l <- rep(x3, each = n_i)
   Xl <- model.matrix(~x1l+x2l+x3l)
   Ul <- rep(U_int, each = n_i)
-
+  time <- rep(0:(t-1), m)
+  
   Y <- Xl %*% t(Bl) + Ul + epsilon
   
-  long_dat <- data.frame(id = rep(id, each = n_i),
-                         time = rep(time, m),
-                         x1l, x2l, x3l, Y)
+  long_data <- data.frame(id = rep(id, each = n_i), time, Xl, Y)
+  
+  summary(lmer(Y ~ x1l + x2l + x3l + time + (1|id), data = long_data)) # Cool!
   
   # Survival part //
-  Bs <- matrix(Bs, nrow = 1)
-  Xs <- model.matrix(~x1+x3-1)
-  # Survival times
-  u <- runif(m)
-  tt <- -log(u)/(lambda * exp(Xs %*% t(Bs) + U_int))
+  Xs <- model.matrix(~x1+x3-1) # Only considering binary and continuous
+  Bs <- matrix(c(b1_s, b3_s), nrow = 1)
+  
+  uu <- runif(m)
+  tt <- -log(uu)/(lambda * exp(Xs %*% t(Bs) + U_int)) 
+  length(which(tt > max(t)))/length(tt) # % who experience event
   
   # Censoring and truncation
-  rateC <- 0.001
-  censor <- rexp(m, rateC)
+  censor <- rexp(m, 0.001)
+  tau <- max(time)
   survtime <- pmin(tt, censor, tau) # time to output
   status <- ifelse(survtime == tt, 1, 0)
   
-  surv_dat <- data.frame(id, x1, x3, survtime, status)
+  surv_data <- data.frame(id, x1, x3, survtime, status)
   
   # Extra output - number of events
   pc_events <- length(which(survtime < tau))/m * 100

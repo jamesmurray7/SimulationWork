@@ -112,7 +112,7 @@ joint_sim <- function(m = 200, n_i = 5,
                       Bl = c(40, -10, 5, 15, 0.1), # Longit: Intercept, binary, factor2-3, continuous
                       Bs = c(-0.3, 0.05), # Survival: log-odds binary and continuous,
                       sigma.i = 3, sigma.s = 2, rho = 0.3, # RE parameters
-                      sigma.e = 1.5, # Error parmeter
+                      sigma.e = 1.5, # Error parameter
                       lambda = 0.05){
   # 'Global' parameters //
   N <- n_i * m
