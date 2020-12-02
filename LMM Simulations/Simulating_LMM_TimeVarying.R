@@ -71,3 +71,8 @@ long_data <- data.frame(
 )
 
 summary(lmer(Y ~ x1 + x2 + x3 + time + (1|id), data = long_data))
+
+
+# Random Slope  -----------------------------------------------------------
+
+# Will be much the same as non-time-varying - do at later date (copy paste exercise!)
